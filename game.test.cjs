@@ -1,0 +1,46 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+class Element{constructor(){this.children=[];this.hidden=false;this.disabled=false;this.style={};this.textContent='';this.attrs={};this.classes=new Set();this.classList={add:x=>this.classes.add(x),remove:x=>this.classes.delete(x),contains:x=>this.classes.has(x),toggle:(x,on)=>on?this.classes.add(x):this.classes.delete(x)};}set innerHTML(v){this.html=v;this.children=[];this.area=null;this.lastChild=new Element();}get innerHTML(){return this.html;}setAttribute(k,v){this.attrs[k]=v;}append(x){this.children.push(x);}replaceChildren(){this.children=[];}querySelector(s){if(s==='.dialog-actions')return this.area ||= new Element();return new Element();}addEventListener(){}showModal(){this.open=true;}close(){this.open=false;}}
+const els=new Map(),get=id=>{if(!els.has(id))els.set(id,new Element());return els.get(id);};const noop=()=>{};const drawnText=[];const context=new Proxy({fillText:t=>drawnText.push(t),createLinearGradient:()=>({addColorStop:noop})},{get:(o,k)=>k in o?o[k]:noop});get('world').getContext=()=>context;
+let soundStarts=0;const param={setValueAtTime:noop,linearRampToValueAtTime:noop,exponentialRampToValueAtTime:noop};class Audio{constructor(){this.state='running';this.currentTime=0;}resume(){this.state='running';return Promise.resolve();}suspend(){this.state='suspended';return Promise.resolve();}createOscillator(){return {frequency:param,connect:target=>target,start:()=>soundStarts++,stop(){this.onended?.();},disconnect:noop};}createGain(){return {gain:param,connect:noop,disconnect:noop};}}
+const bar=new Element();const sandbox={console,Math,Date,Set,innerWidth:1366,innerHeight:768,requestAnimationFrame:noop,window:{AudioContext:Audio,matchMedia:()=>({matches:false}),addEventListener:noop},document:{createElement:()=>new Element(),getElementById:get,querySelector:()=>bar,querySelectorAll:()=>get('answers').children,addEventListener:noop,hidden:false},assert,drawnText};vm.createContext(sandbox);vm.runInContext(fs.readFileSync('game.js','utf8'),sandbox);
+vm.runInContext(`
+function step(dt=1/60){update(dt);draw();}
+function until(predicate){for(let n=0;n<1800&&!predicate();n++)step();assert.ok(predicate(),'expected phase/action must complete');}
+function closePrimary(){$('dialog-content').querySelector('.dialog-actions').children[0].onclick();}
+function chaseTo(i){for(let n=0;n<1000&&Math.abs(targets[i].x-player.x)>30;n++){keys.clear();keys.add(targets[i].x>player.x?'ArrowRight':'ArrowLeft');step();}keys.clear();assert.ok(Math.abs(targets[i].x-player.x)<68);action();}
+// All six permutations preserve the right answer, and never mutate source data.
+const source=levels[0].questions[0],original=JSON.stringify(source),permutations=new Set();
+for(let a=0;a<3;a++)for(let b=0;b<2;b++){const values=[(a+.1)/3,(b+.1)/2];let k=0;const q=shuffleQuestion(source,()=>values[k++]);permutations.add(q.a.join('|'));assert.equal(q.a[q.correct],source.a[source.correct]);}
+assert.equal(permutations.size,6);assert.equal(JSON.stringify(source),original);
+// The fifth miss fails in each mechanic; early, distant and repeated inputs are harmless.
+for(let mode=0;mode<3;mode++){startGame();level=mode;lives=1;mistakes=4;setupRound();update(.01,2);const bad=(current().correct+1)%3;selectAnswer(bad);assert.equal(lives,1);if(mode===0){action();until(()=>phase==='modal');}if(mode===1){action();action();assert.equal(lives,1);chaseTo(bad);}if(mode===2){until(()=>held>=0);action();until(()=>phase==='modal');}assert.equal(lives,0);assert.equal(resumePhase,'failed');const count=mistakes;action();resolve(bad);assert.equal(mistakes,count);assert.equal(lives,0);relics=3;startTreasure();assert.equal(phase,'modal');closePrimary();assert.equal(lives,5);assert.equal(relics,0);assert.equal(phase,'reveal');}
+startGame();
+for(let chapter=0;chapter<3;chapter++)for(let question=0;question<3;question++){
+ assert.equal(level,chapter);assert.equal(round,question);assert.equal(phase,'reveal');selectAnswer(0);action();assert.equal(selected,-1);
+ update(.016,1.99);assert.equal(phase,'reveal');if(chapter===0&&question===0){pauseMenu();update(.016,10);assert.equal(revealElapsed,1.99);closePrimary();}update(.016,.01);assert.equal($('answers').hidden,false);draw();
+ const correct=current().correct,wrong=(correct+1)%3;
+ if(chapter===0){if(question<2){selectAnswer(wrong);action();until(()=>phase==='trap');assert.ok(!eliminated.has(wrong));draw();until(()=>phase==='choose');assert.ok(eliminated.has(wrong));assert.equal(lives,4-question);}selectAnswer(correct);action();until(()=>phase==='track-win');draw();until(()=>phase==='reveal'||phase==='modal');if(question===2){assert.equal(relics,1);assert.equal(lives,3);closePrimary();assert.equal(lives,3);}}
+ if(chapter===1){assert.ok(!$('status').textContent.includes(current().a[correct]));drawnText.length=0;npcLabel(correct,300,200);assert.ok(!drawnText.includes('YOUR PICK'));selectAnswer(wrong);drawnText.length=0;npcLabel(wrong,300,200);assert.ok(drawnText.includes('YOUR PICK'));drawnText.length=0;npcLabel(correct,300,200);assert.ok(!drawnText.includes('YOUR PICK'));selectAnswer(correct);const oldX=player.x;for(let i=0;i<100;i++)step();assert.equal(player.x,oldX,'selection must not auto-move');action();assert.equal(phase,'chase');for(let i=0;i<100;i++)step();assert.equal(player.x,oldX);action();assert.equal(phase,'chase','cannot catch distant NPC');if(question===0){chaseTo(wrong);assert.ok(eliminated.has(wrong));}catchCooldown=0;chaseTo(correct);assert.equal(phase,'feedback');advance();if(question===2){assert.equal(relics,2);assert.equal(lives,2);closePrimary();assert.equal(lives,2);}}
+ if(chapter===2){if(question===0){selectAnswer(wrong);until(()=>held>=0);action();until(()=>phase==='boss-block');draw();until(()=>phase==='choose');assert.ok(eliminated.has(wrong));}selectAnswer(correct);until(()=>held>=0);action();until(()=>phase===(question===2?'boss-death':'boss-hit'));draw();assert.equal($('action').disabled,true);until(()=>phase==='feedback');if(question===2)assert.equal(bossGone,true);advance();if(question===2){assert.equal(relics,3);assert.equal(lives,1);closePrimary();assert.equal(phase,'treasure');}}
+}
+let insertions=[];for(let i=0;i<180&&phase==='treasure';i++){let before=cinematic.inserted;step(.1);if(cinematic.inserted!==before)insertions.push(cinematic.inserted);if(i===25){const time=cinematic.t;pauseMenu();update(.1,10);assert.equal(cinematic.t,time);closePrimary();}}
+assert.deepEqual(insertions,[1,2,3]);assert.equal(phase,'modal');assert.equal(cinematic.events.has('open'),true);assert.equal(cinematic.events.has('reward'),true);assert.equal(cinematic.events.has('portal'),true);assert.equal(cinematic.events.has('hero'),true);draw();closePrimary();assert.equal(level,0);assert.equal(relics,0);assert.equal(lives,5);assert.equal(phase,'reveal');assert.equal(cinematic,null);assert.equal(bossGone,false);
+// Reduced motion still completes the treasure sequence without particle bursts.
+reduced=true;relics=3;startTreasure();until(()=>phase==='modal');assert.equal(particles.length,0);assert.equal(cinematic.inserted,3);
+// Secret code only accepts deliberate, complete sequences and freezes the exact round.
+closePrimary();startGame();update(.01,2);
+function enterSecret(){for(const code of secretCode)readSecretCode({code,repeat:false});}
+readSecretCode({code:'ArrowUp',repeat:true});assert.equal(codeTrail.length,0);
+readSecretCode({code:'ArrowUp'});readSecretCode({code:'KeyX'});assert.equal(codeTrail.length,0);
+readSecretCode({code:'ArrowUp'});codeTime=0;readSecretCode({code:'ArrowDown'});assert.equal(codeTrail.length,0);
+const savedQuestion=current(),savedLives=lives;enterSecret();assert.equal(phase,'secret');assert.equal(goldenFlower,true);
+selectAnswer(0);action();assert.equal(selected,-1);assert.equal(lives,savedLives);
+update(1);const secretTime=secretScene.t;pauseMenu();update(1);assert.equal(secretScene.t,secretTime);closePrimary();
+until(()=>phase==='choose');assert.equal(current(),savedQuestion);assert.equal(lives,savedLives);assert.equal($('secret-badge').hidden,false);
+enterSecret();assert.equal(secretScene,null,'one reveal per run');relics=3;startTreasure();until(()=>phase==='modal');assert.ok($('dialog-content').innerHTML.includes('SPECIAL PRIZE'));assert.ok(cinematic.events.has('flower'));assert.ok(cinematic.t>=20);
+closePrimary();assert.equal(goldenFlower,false);assert.equal($('secret-badge').hidden,true);assert.equal(lives,5);
+reduced=true;update(.01,2);enterSecret();until(()=>phase==='choose');assert.equal(goldenFlower,true);draw();
+console.log('PASS: secret input, timeout, repeat rejection, pause/resume, gameplay freeze, one-time unlock, special ending, reward and next-player reset.');
+console.log('PASS: 6 shuffle permutations; fifth-miss failure in all mechanics; 5 shared lives and cross-level carryover; no chase answer disclosure; selected-only NPC glow; 9 questions; traps, manual catches, boss animations; extended finale, pause, reset and reduced motion.');
+`,sandbox);
+assert.ok(soundStarts>50,'effects should schedule audio');console.log('PASS: '+soundStarts+' synthesized audio notes scheduled with mocked audio output.');
